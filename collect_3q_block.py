@@ -1,20 +1,26 @@
-from qiskit.transpiler.basepasses import TransformationPass
+from qiskit.transpiler.basepasses import TransformationPass,AnalysisPass
 from qiskit.dagcircuit import DAGCircuit
 from qiskit.circuit.library import XGate, YGate
 from qiskit import transpiler
 from qiskit.dagcircuit.dagnode import DAGNode, DAGOpNode, DAGInNode, DAGOutNode
 from qiskit.circuit.gate import Gate
 from qiskit.circuit.quantumregister import QuantumRegister, Qubit
-import rustworkx as rx
+from collections import defaultdict
+from qiskit.transpiler.passes.synthesis.unitary_synthesis import UnitarySynthesis
 
 
-class MyCustomPass(TransformationPass):
+
+
+class Collect_3q_blocks(AnalysisPass):
     def run(self, dag: DAGCircuit) -> DAGCircuit:
-        # Your custom transformation logic here
-        dags = self.collect_3q_block(dag)
+        three_q_blocks , centers= self.collect_3q_blocks(dag)
+        self.property_set["commutation_set"] = defaultdict(list)
+        self.property_set["block_list"] = three_q_blocks
+        self.property_set["centers"] = centers
+        dag.collect_2q_runs()
         return dag
     
-    def collect_3q_block(self,dag: DAGCircuit):
+    def collect_3q_blocks(self,dag: DAGCircuit):
         two_q_blocks = dag.collect_2q_runs()
         print(type(two_q_blocks))
         q_args_list=[]
@@ -89,7 +95,7 @@ class MyCustomPass(TransformationPass):
         return three_q_blocks, centers
 
     
-    # def collect_3q_runs(self, dag: DAGCircuit):
+    # def collect_2q_runs(self, dag: DAGCircuit):
     #     """Return a set of non-conditional runs of 3q "op" nodes."""
 
     #     to_qid = {}
@@ -100,7 +106,7 @@ class MyCustomPass(TransformationPass):
     #         if isinstance(node, DAGOpNode):
     #             return (
     #                 isinstance(node.op, Gate)
-    #                 and len(node.qargs) <= 3
+    #                 and len(node.qargs) <= 2
     #                 and not getattr(node.op, "condition", None)
     #                 and not node.op.is_parameterized()
     #             )
@@ -137,10 +143,12 @@ print(qc.draw())
 
 from qiskit.transpiler import PassManager
 from qiskit.transpiler.passes import Optimize1qGates
+from qiskit.transpiler.passes.optimization.consolidate_blocks import ConsolidateBlocks
+
 
 pass_manager = PassManager()
-pass_manager.append(MyCustomPass())
-pass_manager.append(Optimize1qGates())
+pass_manager.append(Collect_3q_blocks())
+pass_manager.append(ConsolidateBlocks())
 
 transpiled_qc = pass_manager.run(qc)
 print(transpiled_qc)
