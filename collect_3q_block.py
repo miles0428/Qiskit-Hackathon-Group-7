@@ -11,9 +11,13 @@ from qiskit.circuit import Parameter
 from qiskit.quantum_info import Operator, Statevector, DensityMatrix
 from qiskit_algorithms.optimizers import COBYLA
 import numpy as np 
-from qiskit.circuit.library import ZZFeatureMap, RealAmplitudes
+from qiskit.circuit.library import ZZFeatureMap, RealAmplitudes, Initialize
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-from qiskit_ibm_runtime.fake_provider import FakeKyoto
+from qiskit_ibm_runtime.fake_provider import FakeKyoto, FakeNairobi
+from qiskit.circuit.random import random_circuit
+from qiskit.transpiler import PassManager
+from qiskit.transpiler.passes import Optimize1qGates
+from qiskit.transpiler.passes.optimization.consolidate_blocks import ConsolidateBlocks
 
 
 
@@ -58,6 +62,7 @@ class Collect_3q_blocks(AnalysisPass):
                 if elem not in group_qubit:
                     if len(group_qubit)>=3:
                         Pass = False
+                        break
                     else :
                         group_qubit.append(elem)
                 else:
@@ -65,50 +70,10 @@ class Collect_3q_blocks(AnalysisPass):
             if Pass :
                 group.append(i)                    
             else:
-                groups.append(group)
-                # find the center
-                for elem in group_qubit:
-                    is_center = True
-                    for index in group: 
-                        # print(two_q_blocks[index])
-                        if len(two_q_blocks[index]) == 2:
-                            if elem in two_q_blocks[index][0].qargs or elem in two_q_blocks[index][1].qargs:
-                                is_center = True
-                            else:
-                                is_center = False
-                                break
-                        else:
-                            if elem in two_q_blocks[index][0].qargs:
-                                is_center = True
-                            else:
-                                is_center = False
-                                break
-                    if is_center:
-                        centers.append(elem)
-                        break                 
+                groups.append(group)             
                 group = [i]
                 group_qubit = [i for i in q_args]
         groups.append(group)
-        for elem in group_qubit:
-            is_center = True
-            for index in group: 
-                # print(two_q_blocks[index])
-                if len(two_q_blocks[index]) == 2:
-                    if elem in two_q_blocks[index][0].qargs or elem in two_q_blocks[index][1].qargs:
-                        is_center = True
-                    else:
-                        is_center = False
-                        break
-                else:
-                    if elem in two_q_blocks[index][0].qargs:
-                        is_center = True
-                    else:
-                        is_center = False
-                        break
-            if is_center:
-                centers.append(elem)
-                break
-        print(groups)
         three_q_blocks =[]
         # pack each group into a block
         # print(groups)
@@ -123,9 +88,10 @@ class Collect_3q_blocks(AnalysisPass):
         return three_q_blocks, centers
 
 class MLUnitarySynthesis(TransformationPass):
-    def __init__(self, basis_gates=["ecr", 'id', 'rz', 'sx', 'x']):
+    def __init__(self, basis_gates=["ecr", 'id', 'rz', 'sx', 'x'], coupling_map=None):
         super().__init__()
         self.basis_gates = basis_gates
+        self.coupling_map = coupling_map
     def run(self, dag: DAGCircuit) -> DAGCircuit:
         # print(self.property_set["commutation_set"])
         centers = self.property_set["centers"]
@@ -133,12 +99,32 @@ class MLUnitarySynthesis(TransformationPass):
         index = len(centers)-1
         for node in dag.op_nodes():
             if node.op.name =="unitary":
-                print(index)
-                center_index = node.qargs.index(centers[index])
+                # print(index)
+                center_index = 3
+                # center_index = node.qargs.index(centers[index])
+                for i,o in enumerate(node.qargs):
+                    done = False
+                    for j,p in enumerate(node.qargs):
+                        if i == j :
+                            pass
+                        else:
+                            indice = [o._index, p._index]
+                            indice2 = [p._index, o._index]
+                            # print(indice)
+                            if (indice not in self.coupling_map) and (indice2 not in self.coupling_map):
+                                center_index -= i
+                                center_index -= j
+                                done = True
+                                break
+                            # else:
+                            #     print("hello")
+                    if done:
+                        break
+                # print(node.qargs)
                 matrix = node.matrix
                 qc = QuantumCircuit(3)
                 qc_target = QuantumCircuit(3)
-                print(matrix)
+                # print(matrix)
                 qc_target.unitary(matrix, [0, 1, 2])
                 state_vector_target = Statevector(qc_target)
                 p_index = 0
@@ -185,41 +171,39 @@ class MLUnitarySynthesis(TransformationPass):
 
 from qiskit import QuantumCircuit
 
-# qc = QuantumCircuit(4)
-# qc.h(0)
-# qc.cx(0, 1)
-# qc.h(1)
-# qc.cx(1, 2)
-# qc.h(2)
-# qc.h(0)
-# qc.cx(0, 1)
-# qc.h(1)
-# qc.cx(1, 2)
-# qc.h(2)
-# qc.cx(2, 3)
-# qc.cx(2, 1)
-# qc.measure_all()
-# print(qc.draw())
 
-qc = ZZFeatureMap(5,1)
-backend = FakeKyoto()
+# qc = ZZFeatureMap(5,2)
+qc = random_circuit(5,20)
+# state_vector_actual = Statevector(qc)
+backend = FakeNairobi()
+coupling_map = backend.configuration().coupling_map
+# print(coupling_map)
 pass_manager = generate_preset_pass_manager(basis_gates=['ecr', 'id', 'rz', 'sx', 'x'], backend=backend,optimization_level=3)
 
 
-from qiskit.transpiler import PassManager
-from qiskit.transpiler.passes import Optimize1qGates
-from qiskit.transpiler.passes.optimization.consolidate_blocks import ConsolidateBlocks
+
+
 
 
 pass_manager_custom = PassManager()
 pass_manager_custom.append(Collect_3q_blocks())
 pass_manager_custom.append(ConsolidateBlocks())
-# pass_manager_custom.append(MLUnitarySynthesis())
+pass_manager_custom.append(MLUnitarySynthesis(coupling_map=coupling_map))
 
 transpiled_qc = pass_manager.run(qc)
 
-print(transpiled_qc.draw(idle_wires=False))
-
-transpiled_qc = pass_manager_custom.run(transpiled_qc)
+print(f'Depth: {transpiled_qc.depth()}')
 
 # print(transpiled_qc.draw(idle_wires=False))
+
+
+transpiled_qc = pass_manager_custom.run(transpiled_qc).decompose()
+state_vector_actual = Statevector(transpiled_qc)
+# print(transpiled_qc.draw(idle_wires=False))
+print(f'Depth: {transpiled_qc.depth()}')
+
+state_vector_transpiled = Statevector(transpiled_qc)
+
+print(f'fidelity: {state_vector_actual.inner(state_vector_transpiled)}')
+
+
